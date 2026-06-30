@@ -1,0 +1,269 @@
+{
+  "name": "AI Content Repurposing Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        },
+        "url": "https://feeds.feedburner.com/YOUR_RSS_FEED_URL",
+        "options": {}
+      },
+      "id": "1a2b3c4d-2001",
+      "name": "RSS Feed — Monitor New Content",
+      "type": "n8n-nodes-base.rssFeedReadTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "rss-monitor-001"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-201",
+              "leftValue": "={{ $json.title }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-2002",
+      "name": "Validate — Content Has Title",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\n\nconst cleanText = (text) => {\n  if (!text) return '';\n  return text\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&nbsp;/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n};\n\nconst content = cleanText(item.content || item.contentSnippet || item.summary || '');\nconst truncated = content.length > 3000 ? content.substring(0, 3000) + '...' : content;\n\nreturn {\n  title: cleanText(item.title),\n  content: truncated,\n  url: item.link || item.url || '',\n  author: item.creator || item.author || 'Unknown',\n  published_at: item.pubDate || item.isoDate || new Date().toISOString(),\n  feed_source: item.feedUrl || 'RSS Feed',\n  word_count: content.split(' ').length,\n  captured_at: new Date().toISOString()\n};"
+      },
+      "id": "3c4d5e6f-2003",
+      "name": "Code — Clean & Extract Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 2048,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"You are a content repurposing specialist. Take the article below and reformat it for three different platforms. Return ONLY a valid JSON object with no extra text.\\n\\nARTICLE TITLE: {{ $json.title }}\\nARTICLE URL: {{ $json.url }}\\nARTICLE CONTENT: {{ $json.content }}\\n\\nReturn this exact JSON structure:\\n{\\n  \\\"linkedin\\\": {\\n    \\\"hook\\\": \\\"<attention-grabbing first line, max 20 words>\\\",\\n    \\\"body\\\": \\\"<3-5 short paragraphs with key insights, professional tone, line breaks between paragraphs>\\\",\\n    \\\"cta\\\": \\\"<one call to action line>\\\",\\n    \\\"hashtags\\\": [\\\"#tag1\\\", \\\"#tag2\\\", \\\"#tag3\\\", \\\"#tag4\\\", \\\"#tag5\\\"],\\n    \\\"char_count\\\": <estimated character count as number>\\n  },\\n  \\\"twitter\\\": {\\n    \\\"thread\\\": [\\n      \\\"<tweet 1 — hook, max 280 chars>\\\",\\n      \\\"<tweet 2 — key point, max 280 chars>\\\",\\n      \\\"<tweet 3 — key point, max 280 chars>\\\",\\n      \\\"<tweet 4 — key point, max 280 chars>\\\",\\n      \\\"<tweet 5 — CTA + link, max 280 chars>\\\"\\n    ]\\n  },\\n  \\\"email\\\": {\\n    \\\"subject_line\\\": \\\"<email subject, max 60 chars>\\\",\\n    \\\"preview_text\\\": \\\"<preview text, max 90 chars>\\\",\\n    \\\"body\\\": \\\"<full email body with greeting, 3-4 paragraphs, and sign-off. Conversational tone.>\\\",\\n    \\\"cta_button_text\\\": \\\"<button label, max 5 words>\\\",\\n    \\\"cta_url\\\": \\\"{{ $json.url }}\\\"\\n  },\\n  \\\"summary\\\": \\\"<2-sentence summary of the original article>\\\"\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "4d5e6f7g-2004",
+      "name": "Claude API — Repurpose for 3 Platforms",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Code — Clean & Extract Content').item.json;\nconst rawContent = $input.item.json.content[0].text;\n\nlet repurposed;\ntry {\n  const jsonMatch = rawContent.match(/\\{[\\s\\S]*\\}/);\n  repurposed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n} catch (e) {\n  repurposed = { parse_error: true, raw: rawContent };\n}\n\nconst linkedin_post = repurposed.linkedin\n  ? `${repurposed.linkedin.hook}\\n\\n${repurposed.linkedin.body}\\n\\n${repurposed.linkedin.cta}\\n\\n${(repurposed.linkedin.hashtags || []).join(' ')}`\n  : '';\n\nconst twitter_thread = repurposed.twitter?.thread\n  ? repurposed.twitter.thread.join('\\n---\\n')\n  : '';\n\nreturn {\n  // Source metadata\n  original_title: source.title,\n  original_url: source.url,\n  original_author: source.author,\n  published_at: source.published_at,\n  word_count: source.word_count,\n\n  // LinkedIn\n  linkedin_hook: repurposed.linkedin?.hook || '',\n  linkedin_body: repurposed.linkedin?.body || '',\n  linkedin_cta: repurposed.linkedin?.cta || '',\n  linkedin_hashtags: (repurposed.linkedin?.hashtags || []).join(' '),\n  linkedin_full_post: linkedin_post,\n\n  // Twitter/X\n  twitter_thread: twitter_thread,\n  twitter_tweet_count: repurposed.twitter?.thread?.length || 0,\n\n  // Email\n  email_subject: repurposed.email?.subject_line || '',\n  email_preview: repurposed.email?.preview_text || '',\n  email_body: repurposed.email?.body || '',\n  email_cta_text: repurposed.email?.cta_button_text || '',\n  email_cta_url: repurposed.email?.cta_url || '',\n\n  // Summary\n  article_summary: repurposed.summary || '',\n\n  // Pipeline metadata\n  processed_at: new Date().toISOString(),\n  pipeline_version: '1.0.0',\n  parse_error: repurposed.parse_error || false\n};"
+      },
+      "id": "5e6f7g8h-2005",
+      "name": "Code — Structure All Outputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-202",
+              "leftValue": "={{ $json.parse_error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6f7g8h9i-2006",
+      "name": "Validate — Parse Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Content Queue"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "valueInputMode": "RAW"
+        }
+      },
+      "id": "7g8h9i0j-2007",
+      "name": "Google Sheets — Save to Content Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1680, 120]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Error Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "valueInputMode": "RAW"
+        }
+      },
+      "id": "8h9i0j1k-2008",
+      "name": "Google Sheets — Log Parse Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1680, 340]
+    }
+  ],
+  "connections": {
+    "RSS Feed — Monitor New Content": {
+      "main": [
+        [
+          {
+            "node": "Validate — Content Has Title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Content Has Title": {
+      "main": [
+        [
+          {
+            "node": "Code — Clean & Extract Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Code — Clean & Extract Content": {
+      "main": [
+        [
+          {
+            "node": "Claude API — Repurpose for 3 Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API — Repurpose for 3 Platforms": {
+      "main": [
+        [
+          {
+            "node": "Code — Structure All Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code — Structure All Outputs": {
+      "main": [
+        [
+          {
+            "node": "Validate — Parse Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Parse Success": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets — Log Parse Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets — Save to Content Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateId": "ai-content-repurposing-engine-v1",
+    "description": "Monitors RSS feeds for new content, cleans and extracts text, repurposes automatically for LinkedIn, Twitter/X and email newsletter using Claude AI, and saves formatted outputs to Google Sheets content queue."
+  }
+}
